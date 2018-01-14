@@ -1,0 +1,24 @@
+#!/usr/bin/perl -w
+use strict;
+use Time::HiRes qw(gettimeofday tv_interval);
+
+my $i;
+my $j;
+my $k;
+
+for ($k = 1000000; $k > 10; $k /= 10) {
+  my $tint = 0;
+  for ($j = 0; $j < 10; $j++) {
+    my $t0 = [gettimeofday];
+
+    for ($i = 0; $i < $k; $i++) {}
+  
+    my $t1 = [gettimeofday];
+    $tint += tv_interval($t0, $t1);
+  }
+  $tint /= 10;
+
+  print "$k\n";
+  print "t-intrv: $tint\n";
+}
+

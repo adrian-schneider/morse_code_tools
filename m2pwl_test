@@ -1,0 +1,2 @@
+#!/bin/ksh
+./m2pwl.pl $* | pwl2rdf.pl; rdfdump.pl -d

@@ -1,0 +1,269 @@
+#!/usr/bin/perl -w
+use strict;
+use Time::HiRes qw(gettimeofday tv_interval sleep);
+
+# Time unit for morse signals for this computer, in seconds.
+# Time::Hires here is good down to 0.001s.
+my $time_unit = 0.1;
+
+
+# The morse_to_signal function should be called frequently to allow for
+# accurate signal stracking.
+# If the signal time has elapsed by more than this value, consider this
+# a timout situation.
+my $time_out_threshold = $time_unit / 4;
+
+my $time_sleep = $time_unit / 6;
+
+
+# Return whether the character argument is
+# considered a space or mark.
+# Marks: '-'/dah, '.'/dit
+# Spaces: ' '/character-space, '/'/word-space, '*'/space between marks 
+sub is_mark($) {
+  my $c = shift;
+  if ($c eq '-' or $c eq '.') {
+    return 1 
+  }
+  elsif ($c eq ' ' or $c eq '/' or $c eq '*') {
+    return 0
+  }
+  else {
+    die "invalid character '$c' supplied."
+  }
+}
+
+
+# Return the duration of the character argument as
+# a multiple of the time unit.
+# dit and dit-space: 1 unit,
+# dah and dah-space: 3 units,
+# word-space:        7 units.
+sub char_to_time($) {
+  my $c = shift;
+  my $t = 0;
+  if ($c eq '-' or $c eq ' ')  {
+    $t = 3 * $time_unit 
+  }
+  elsif ($c eq '.' or $c eq '*') { 
+    $t = $time_unit 
+  }
+  elsif ($c eq '/') { 
+    $t = 7 * $time_unit 
+  }
+  else {
+    die "invalid character '$c' supplied."
+  }
+  return $t;
+}
+
+
+my $str_morse = '';
+my $char_index = 0;
+my $char_next = 0;
+my $char = 0;
+my $time_char = 0;
+my $time_start = 0;
+my $signal = 0;
+
+# Call the initialization function before each first call to
+# morse_to_signal or morse_to_signal_more.
+sub morse_to_signal_initialize() {
+  $char_index = 0;
+  $char_next = "*";
+  $str_morse .= "*"; # Add end-of-line marker.
+  $char = substr($str_morse, 0, 1);
+  $time_char = char_to_time($char);
+  $signal = is_mark($char);
+  $time_start = [gettimeofday]
+}
+
+
+# Return true as long as morse_to_signal is signalling, false
+# when it reached the end of the morse string.
+sub morse_to_signal_more() {
+  return $char_index >= 0;
+}
+
+
+# Return a sequence of 0 or 1 values when called in real time, according
+# to the morse character string. Observing specified time units for
+# dits, dahs and spaces.
+sub morse_to_signal() {
+  # End of string reached, return last signal.
+  if ($char_index < 0) {
+    return $signal
+  }
+
+  # Take the elapsed time. 
+  my $time_elapsed = tv_interval($time_start);
+
+  my $time_over = $time_elapsed - $time_char;
+
+  # Time interval for this char has finished.
+  if ($time_over > 0) {
+    # This function has not been called frequently enough for accurate
+    # sequencing -- this is considered a timeout situation.
+    if ($time_over > $time_out_threshold) {
+      die "timeout: $time_over"
+    }
+
+    # Reset the timer.
+    $time_start = [gettimeofday];
+
+    # Lookup the next character.
+    $char_next = substr($str_morse, $char_index + 1, 1);
+
+    # At the end of the morse string, stop traversing and set signal
+    # to space.
+    if ($char_next eq "*") {
+      $signal = 0;
+      $char_index = -1
+    }
+
+    # Between two consecutive marks, we have to output an implicit
+    # one time-unit space.
+    elsif (is_mark($char) && is_mark($char_next)) {
+      $signal = 0;
+      $time_char = $time_unit;
+      $char = "*"
+    }
+
+    # Advance to the next character.
+    else {
+      $char = $char_next;
+      $char_index++;
+      $signal = is_mark($char);
+      $time_char = char_to_time($char) 
+    }
+  }
+
+  return $signal
+}
+
+
+# Calculation of the dit threshold dit_th.
+#
+#   dit_av average dit time.
+#   dah_av average dah time.
+#
+#          dit_av                      dah_av
+#   0-..---!-----------:-----------!----->t
+#                      dit-th
+#
+#   1) dit_th = 2 * (dah_av / 3)
+#   2) dit_th = (dit_av + dah_av) / 2
+#
+# 1) Original formula: only based on actual average dah-time.
+#    Dit is assumed dah_av / 3.
+# 2) New formula: based on actual average dit- and dah-times.
+#
+
+
+# Decode a real time sequence of 0 or 1 signals to morse code.
+# The signal sequence is provided in real time by repeated calls
+# to the morse_to_signal function, which simulates a morse key.
+sub signal_to_morse() {
+  my $last_signal = 0;
+  my $time_mark = [gettimeofday];
+  my $time_space = [gettimeofday];
+  my $time_ditdah_threshold = 0;
+  my $str_morse_ret = '';
+
+  while (morse_to_signal_more()) {
+    my $signal = morse_to_signal();
+
+    # Detect signal change.
+    if ($signal != $last_signal) {
+
+      # Handle a mark signal.
+      if ($last_signal) {
+        # Stop the mark timer.
+        $time_mark = tv_interval($time_mark);
+
+        # Start the space timer.
+        $time_space = [gettimeofday];
+
+        my $adjust = 0;
+
+        # If time is above threshold, assume a dah.
+        if ($time_mark > $time_ditdah_threshold) {
+          $str_morse_ret .= '-';
+
+          # Adjust threshold value.
+          $adjust = 2 * ($time_mark / 3);
+        }
+
+        # If time is below thershold, assume a dit.
+        else {
+          $str_morse_ret .= '.';
+
+          # Adjust threshold value.
+          $adjust = 2 * $time_mark;
+        }
+
+        # Average up the threshold time.
+        $time_ditdah_threshold = ($time_ditdah_threshold + $adjust) / 2;
+      }
+
+      # Handle a space signal.
+      else {
+        # Stop the space timer.
+        $time_space = tv_interval($time_space);
+
+        # Start the mark timer.
+        $time_mark = [gettimeofday];
+
+        # If time is above 2.5 * threshold, assume a word space.
+        if ($time_space > 2.5 * $time_ditdah_threshold) {
+          $str_morse_ret .= '/';
+        }
+
+        # If time is above threshold, assume a character space.
+        # Otherwise it is an in-character space.
+        elsif ($time_space > $time_ditdah_threshold) {
+          $str_morse_ret .= ' ';
+        }
+      }
+
+      $last_signal = $signal;
+    }
+
+    # Avoid being to busy.
+    sleep($time_sleep);
+  }
+
+  return $str_morse_ret;
+}
+
+
+# Main
+
+$str_morse = "-.. -/..- --";
+
+print "morse    : $str_morse\n";
+print "time unit: $time_unit\n";
+print "timeout  : $time_out_threshold\n";
+print "sleep    : $time_sleep\n";
+print "signal   : ";
+
+morse_to_signal_initialize();
+
+while (morse_to_signal_more()) {
+  my $v = morse_to_signal();
+
+  print $v;
+  sleep($time_sleep);
+}
+
+print "\n\n";
+
+
+$str_morse = "..-.-. -.--/.-.. -.-/.... -.-. ----";
+
+print "morse    : $str_morse\n";
+
+morse_to_signal_initialize();
+my $str = signal_to_morse();
+print "decoded  : $str\n";
+
